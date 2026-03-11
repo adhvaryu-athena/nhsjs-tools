@@ -290,18 +290,6 @@ class ListBlock:
 # 5.  BODY EXTRACTION AND BLOCK PARSING
 # ============================================================================
 
-def extract_preamble_title(tex: str) -> str:
-    """Extract \\title{...} from the preamble (before \\begin{document})."""
-    preamble_m = re.search(r'^(.*?)\\begin\{document\}', tex, re.DOTALL)
-    preamble = preamble_m.group(1) if preamble_m else ''
-    title_m = re.search(r'\\title\{((?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*)\}', preamble)
-    if title_m:
-        raw = title_m.group(1)
-        raw = re.sub(r'\\\\(\[[^\]]*\])?', ' ', raw).strip()
-        return raw
-    return ''
-
-
 def get_body(tex: str) -> str:
     m = re.search(r'\\begin\{document\}(.*?)\\end\{document\}', tex, re.DOTALL)
     body = m.group(1) if m else tex
@@ -317,7 +305,7 @@ def get_body(tex: str) -> str:
     return body
 
 
-def parse_body(body: str, preamble_title: str = '') -> list:
+def parse_body(body: str) -> list:
     body = re.sub(r'%[^\n]*', '', body)
     body = re.sub(r'\\appendix\b', r'\n\\section{Appendix}\n', body)
 
@@ -330,29 +318,33 @@ def parse_body(body: str, preamble_title: str = '') -> list:
 
     events = []
 
-    # --- Title: check body first, fall back to preamble ---
+    # --- Title ---
     title_from_cmd = re.search(r'\\title\{((?:[^{}]|\{[^{}]*\})*)\}', body)
     maketitle_m = re.search(r'\\maketitle\b', body)
-
-    title_text = ''
-    if title_from_cmd:
-        title_text = title_from_cmd.group(1)
-        title_text = re.sub(r'\\\\(\[[^\]]*\])?', ' ', title_text).strip()
+    if title_from_cmd and maketitle_m:
+        raw_title = title_from_cmd.group(1)
+        raw_title = re.sub(r'\\\\(\[[^\]]*\])?', ' ', raw_title).strip()
+        events.append((maketitle_m.start(), maketitle_m.end(),
+                       TitleBlock(raw_title)))
         body = body[:title_from_cmd.start()] + ' ' * (title_from_cmd.end() - title_from_cmd.start()) + body[title_from_cmd.end():]
-    elif preamble_title:
-        title_text = preamble_title
-
-    if title_text:
-        if maketitle_m:
-            events.append((maketitle_m.start(), maketitle_m.end(),
-                           TitleBlock(title_text)))
+    else:
+        title_center = re.search(
+            r'\\begin\{center\}\s*'
+            r'\{?\\(?:LARGE|Large|huge|Huge|large)\s+\\textbf\{((?:[^{}]|\{[^{}]*\})*)\}'
+            r'[^}]*\}?'
+            r'.*?'
+            r'\\end\{center\}',
+            body, re.DOTALL
+        )
+        if title_center:
+            raw_title = title_center.group(1)
+            raw_title = re.sub(r'\\\\(\[[^\]]*\])?', ' ', raw_title).strip()
+            events.append((title_center.start(), title_center.end(),
+                           TitleBlock(raw_title)))
         else:
-            # No \maketitle, insert title at the very beginning
-            events.append((0, 0, TitleBlock(title_text)))
+            body = re.sub(r'\\begin\{center\}(.*?)\\end\{center\}',
+                          r'\1', body, flags=re.DOTALL)
 
-    # Flatten center blocks and minipages
-    body = re.sub(r'\\begin\{center\}(.*?)\\end\{center\}',
-                  r'\1', body, flags=re.DOTALL)
     body = re.sub(r'\\begin\{minipage\}(?:\[[^\]]*\])?\{[^}]*\}(.*?)\\end\{minipage\}',
                   r'\1', body, flags=re.DOTALL)
 
@@ -1160,26 +1152,6 @@ def write_docx(blocks: list, num_bib: dict, key_bib: dict,
                 para = doc.add_paragraph(style=list_style)
                 _add_runs_to_para(para, runs)
 
-    # -- Append References section at end --
-    if num_bib or key_bib:
-        doc.add_heading('References', level=1)
-
-        if num_bib:
-            # Numbered references (NHSJS enumerate style)
-            sorted_keys = sorted(num_bib.keys())
-            for idx, key in enumerate(sorted_keys, start=1):
-                para = doc.add_paragraph(style='List Number')
-                run = para.add_run(num_bib[key])
-                run.font.name = 'Times New Roman'
-                run.font.size = Pt(12)
-        elif key_bib:
-            # Key-based references (thebibliography style)
-            for idx, (key, text) in enumerate(key_bib.items(), start=1):
-                para = doc.add_paragraph(style='List Number')
-                run = para.add_run(text)
-                run.font.name = 'Times New Roman'
-                run.font.size = Pt(12)
-
     doc.save(output_path)
     print(f'\nSaved: {output_path}')
 
@@ -1231,17 +1203,11 @@ def main():
     # 2. Protect math
     tex = protect_math(tex)
 
-    # 3. Extract preamble title (before \begin{document})
-    preamble_title = extract_preamble_title(tex)
-    if preamble_title:
-        print(f'  Title from preamble: {preamble_title[:60]}...'
-              if len(preamble_title) > 60 else f'  Title from preamble: {preamble_title}')
-
-    # 4. Extract body
+    # 3. Extract body
     body = get_body(tex)
 
-    # 5. Parse blocks
-    blocks = parse_body(body, preamble_title)
+    # 4. Parse blocks
+    blocks = parse_body(body)
     counts = {}
     for b in blocks:
         k = type(b).__name__
