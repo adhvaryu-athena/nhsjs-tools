@@ -54,9 +54,8 @@ with tab1:
 
                 num_bib, key_bib = latex_conv.parse_bibliography(tex_source)
                 tex_protected = latex_conv.protect_math(tex_source)
-                preamble_title = latex_conv.extract_preamble_title(tex_protected)
                 body = latex_conv.get_body(tex_protected)
-                blocks = latex_conv.parse_body(body, preamble_title)
+                blocks = latex_conv.parse_body(body)
                 label_map = latex_conv.build_label_map(blocks)
 
                 output_path = work / "output.docx"
