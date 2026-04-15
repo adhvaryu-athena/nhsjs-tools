@@ -108,11 +108,17 @@ def _find_main_tex(root: Path) -> tuple:
 # 1.  BIBLIOGRAPHY  -  supports BOTH formats
 # ============================================================================
 
-def parse_bibliography(tex: str) -> tuple:
+def parse_bibliography(tex: str, project_root: "Path | None" = None) -> tuple:
     r"""
     Returns:
         num_bib  : {int -> plain_text_citation}   for \nhsjsref / numbered
         key_bib  : {str -> plain_text_citation}   for \cite{key}
+
+    Parses:
+      - \begin{enumerate} references (NHSJS numbered style)
+      - \begin{thebibliography} ... \bibitem references (key-based)
+      - External .bib files referenced via \bibliography{...} (BibTeX)
+        when project_root is provided.
     """
     num_bib = {}
     key_bib = {}
@@ -155,7 +161,306 @@ def parse_bibliography(tex: str) -> tuple:
             if plain:
                 key_bib[key] = plain
 
+    # --- C: external .bib files referenced via \bibliography{...} ------------
+    if project_root is not None:
+        bibfile_entries = _load_bibfiles(tex, project_root)
+        for key, citation in bibfile_entries.items():
+            # Do not override keys already defined in \begin{thebibliography}
+            if key not in key_bib:
+                key_bib[key] = citation
+
     return num_bib, key_bib
+
+
+def _load_bibfiles(tex: str, project_root: Path) -> dict:
+    r"""
+    Scan tex for \bibliography{...} declarations and parse any referenced
+    .bib files found under project_root. Returns {key: formatted_citation}.
+
+    If no explicit \bibliography directive is found but a single .bib file
+    exists in the project, it is parsed as a fallback.
+    """
+    key_bib = {}
+
+    bib_names = []
+    for m in re.finditer(r'\\bibliography\{([^}]+)\}', tex):
+        for name in m.group(1).split(','):
+            name = name.strip()
+            if name:
+                bib_names.append(name)
+
+    bib_paths = []
+    if bib_names:
+        for name in bib_names:
+            # \bibliography names may omit the .bib suffix
+            candidates = [name, name + '.bib']
+            found = None
+            for c in candidates:
+                p = (project_root / c)
+                if p.exists():
+                    found = p
+                    break
+                # Recursive search by basename
+                matches = list(project_root.rglob(Path(c).name))
+                if matches:
+                    found = matches[0]
+                    break
+            if found:
+                bib_paths.append(found)
+    else:
+        # Fallback: if exactly one .bib file exists, use it
+        all_bibs = list(project_root.rglob('*.bib'))
+        if len(all_bibs) == 1:
+            bib_paths = all_bibs
+
+    for bp in bib_paths:
+        try:
+            raw = bp.read_text(encoding='utf-8', errors='replace')
+        except Exception as e:
+            print(f'  WARNING: Could not read {bp}: {e}', file=sys.stderr)
+            continue
+        entries = _parse_bibtex(raw)
+        for key, citation in entries.items():
+            if key not in key_bib:
+                key_bib[key] = citation
+        print(f'  Loaded {len(entries)} entries from {bp.name}')
+
+    return key_bib
+
+
+def _parse_bibtex(raw: str) -> dict:
+    r"""
+    Parse a BibTeX .bib file into {key: nhsjs_formatted_citation}.
+
+    Handles braces and quoted field values, and the most common entry
+    types (@article, @book, @inproceedings, @misc, @online, @techreport,
+    @phdthesis, @mastersthesis, @incollection, etc.).
+    Ignores @string, @comment, @preamble.
+    """
+    result = {}
+    # Strip comments (a % at start of line or after whitespace)
+    raw = re.sub(r'(?m)^\s*%.*$', '', raw)
+
+    i, n = 0, len(raw)
+    while i < n:
+        at = raw.find('@', i)
+        if at == -1:
+            break
+        # Read entry type
+        m = re.match(r'@([A-Za-z]+)\s*[{(]', raw[at:])
+        if not m:
+            i = at + 1
+            continue
+        entry_type = m.group(1).lower()
+        body_start = at + m.end()  # position just after opening { or (
+        opener = raw[at + m.end() - 1]
+        closer = '}' if opener == '{' else ')'
+
+        # Find matching closer, tracking nested braces
+        depth = 1
+        j = body_start
+        while j < n and depth > 0:
+            c = raw[j]
+            if c == '{':
+                depth += 1
+            elif c == '}':
+                depth -= 1
+            j += 1
+        body = raw[body_start:j - 1]
+        i = j
+
+        if entry_type in ('string', 'comment', 'preamble'):
+            continue
+
+        # First comma separates key from fields
+        comma_pos = body.find(',')
+        if comma_pos == -1:
+            continue
+        key = body[:comma_pos].strip()
+        fields_raw = body[comma_pos + 1:]
+
+        fields = _parse_bibtex_fields(fields_raw)
+        if not key:
+            continue
+        citation = _format_bibtex_entry(entry_type, fields)
+        if citation:
+            result[key] = citation
+
+    return result
+
+
+def _parse_bibtex_fields(s: str) -> dict:
+    """
+    Parse the fields portion of a BibTeX entry into a lowercase-keyed dict.
+    Field values may be {...}, "...", or unquoted tokens.
+    """
+    fields = {}
+    i, n = 0, len(s)
+    while i < n:
+        # Skip whitespace and commas
+        while i < n and s[i] in ' \t\r\n,':
+            i += 1
+        if i >= n:
+            break
+        # Read field name
+        m = re.match(r'([A-Za-z_\-]+)\s*=\s*', s[i:])
+        if not m:
+            break
+        name = m.group(1).lower()
+        i += m.end()
+        if i >= n:
+            break
+
+        value = ''
+        if s[i] == '{':
+            depth, start = 1, i + 1
+            j = i + 1
+            while j < n and depth > 0:
+                if s[j] == '{':
+                    depth += 1
+                elif s[j] == '}':
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            value = s[start:j]
+            i = j + 1
+        elif s[i] == '"':
+            start = i + 1
+            j = i + 1
+            depth = 0
+            while j < n:
+                if s[j] == '{':
+                    depth += 1
+                elif s[j] == '}':
+                    depth = max(0, depth - 1)
+                elif s[j] == '"' and depth == 0:
+                    break
+                j += 1
+            value = s[start:j]
+            i = j + 1
+        else:
+            # Unquoted token (number or string macro)
+            j = i
+            while j < n and s[j] not in ',\n':
+                j += 1
+            value = s[i:j].strip()
+            i = j
+
+        fields[name] = value
+    return fields
+
+
+def _format_bibtex_entry(entry_type: str, fields: dict) -> str:
+    r"""
+    Format a BibTeX entry in the NHSJS online-publication citation style:
+        Author. Title. Journal. Vol. X, pg. Y-Z, Year, DOI.
+    Missing fields are gracefully omitted.
+    """
+    parts = []
+
+    author = fields.get('author') or fields.get('editor', '')
+    if author:
+        parts.append(_format_bib_authors(author))
+
+    title = fields.get('title', '')
+    if title:
+        parts.append(_clean_bib_value(title))
+
+    venue = (fields.get('journal')
+             or fields.get('booktitle')
+             or fields.get('publisher')
+             or fields.get('institution')
+             or fields.get('school')
+             or fields.get('howpublished')
+             or '')
+    if venue:
+        parts.append(_clean_bib_value(venue))
+
+    volnum = []
+    vol = fields.get('volume', '').strip()
+    num = fields.get('number', '').strip()
+    if vol:
+        volnum.append(f'Vol. {_clean_bib_value(vol)}')
+    if num:
+        volnum.append(f'No. {_clean_bib_value(num)}')
+    vn_str = ', '.join(volnum)
+
+    pages = fields.get('pages', '').strip()
+    pages_str = ''
+    if pages:
+        pg = _clean_bib_value(pages).replace('--', '\u2013').replace('-', '\u2013')
+        pages_str = f'pg. {pg}'
+
+    year = fields.get('year', '').strip()
+    year_str = _clean_bib_value(year) if year else ''
+
+    tail_bits = [b for b in (vn_str, pages_str, year_str) if b]
+    if tail_bits:
+        parts.append(', '.join(tail_bits))
+
+    doi = fields.get('doi', '').strip()
+    if doi:
+        parts.append(f'DOI: {_clean_bib_value(doi)}')
+    else:
+        url = fields.get('url', '').strip()
+        if url:
+            parts.append(_clean_bib_value(url))
+
+    citation = '. '.join(p.rstrip('.').strip() for p in parts if p.strip())
+    if citation and not citation.endswith('.'):
+        citation += '.'
+    return citation
+
+
+def _format_bib_authors(raw: str) -> str:
+    """
+    Format BibTeX author field ("Last, First and Last2, First2" or
+    "First Last and First2 Last2") as "Last, F.; Last2, F2."
+    """
+    raw = _clean_bib_value(raw)
+    names = re.split(r'\s+and\s+', raw)
+    formatted = []
+    for name in names:
+        name = name.strip()
+        if not name:
+            continue
+        if ',' in name:
+            last, first = [x.strip() for x in name.split(',', 1)]
+        else:
+            parts = name.split()
+            if len(parts) == 1:
+                formatted.append(parts[0])
+                continue
+            last = parts[-1]
+            first = ' '.join(parts[:-1])
+        initials = ''.join(
+            (p[0] + '.') for p in re.split(r'[\s\-]+', first) if p
+        )
+        formatted.append(f'{last}, {initials}' if initials else last)
+    if not formatted:
+        return ''
+    if len(formatted) > 6:
+        return formatted[0] + ', et al'
+    return '; '.join(formatted)
+
+
+def _clean_bib_value(s: str) -> str:
+    """Strip LaTeX markup from a BibTeX field value."""
+    s = s.replace('\n', ' ').replace('\r', ' ')
+    s = re.sub(r'\\url\{([^}]*)\}', r'\1', s)
+    s = re.sub(r'\\href\{([^}]*)\}\{[^}]*\}', r'\1', s)
+    for cmd in ('textit', 'emph', 'textbf', 'texttt', 'textrm', 'textnormal',
+                'text', 'mathrm'):
+        s = re.sub(rf'\\{cmd}\{{([^}}]*)\}}', r'\1', s)
+    s = re.sub(r"\\['`\"^~=.]?\{([^}])\}", r'\1', s)
+    s = re.sub(r"\\['`\"^~=.]([a-zA-Z])", r'\1', s)
+    s = s.replace('---', '\u2014').replace('--', '\u2013')
+    s = s.replace('\\&', '&').replace('\\%', '%').replace('\\_', '_')
+    s = re.sub(r'\\[a-zA-Z]+\*?\b\s*', '', s)
+    s = re.sub(r'[{}]', '', s)
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s
 
 
 def _clean_bib_entry(s: str) -> str:
@@ -1195,7 +1500,7 @@ def main():
     print(f'  Project root: {project_root}')
 
     # 1. Parse bibliography BEFORE math protection
-    num_bib, key_bib = parse_bibliography(tex)
+    num_bib, key_bib = parse_bibliography(tex, project_root)
     print(f'  Numbered refs: {len(num_bib)},  Key-based refs: {len(key_bib)}')
     if not num_bib and not key_bib:
         print('  WARNING: No references found.', file=sys.stderr)

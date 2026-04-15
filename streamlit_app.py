@@ -52,7 +52,9 @@ with tab1:
                     tex_source = input_path.read_text(encoding="utf-8")
                     project_root = work
 
-                num_bib, key_bib = latex_conv.parse_bibliography(tex_source)
+                num_bib, key_bib = latex_conv.parse_bibliography(
+                    tex_source, project_root
+                )
                 tex_protected = latex_conv.protect_math(tex_source)
                 body = latex_conv.get_body(tex_protected)
                 blocks = latex_conv.parse_body(body)
