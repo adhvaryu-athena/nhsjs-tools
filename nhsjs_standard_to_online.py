@@ -4,11 +4,28 @@ NHSJS → NHSJS Online Citation Converter
 Converts a standard NHSJS Word document (superscript numbered citations)
 to the NHSJS Online publication format (full citations in double parentheses).
 
-Usage:
-    python nhsjs_converter.py input.docx output.docx
-    python nhsjs_converter.py input.docx output.docx --refs refs.txt
+Public API
+----------
+    convert_standard_to_online(input_path, output_path, refs_txt=None) -> None
+        Canonical entry point. Reads input_path (.docx with OOXML superscript
+        citations), writes output_path with each superscript replaced by the
+        corresponding "((full citation))" block. Optional refs_txt lets the
+        caller supply numbered references externally.
 
-Requirements:
+    convert(...)
+        Backwards-compat alias for convert_standard_to_online. Older code
+        and the CLI continue to work unchanged.
+
+Everything else in this module is internal — names prefixed with an
+underscore should be treated as private.
+
+CLI usage
+---------
+    python nhsjs_standard_to_online.py input.docx output.docx
+    python nhsjs_standard_to_online.py input.docx output.docx --refs refs.txt
+
+Requirements
+------------
     pip install python-docx lxml
 """
 
@@ -195,9 +212,23 @@ def process_paragraph(p_elem, citation_map):
     return missing
 
 
-# ─── Main ─────────────────────────────────────────────────────────────────────
+# ─── Public API ───────────────────────────────────────────────────────────────
 
-def convert(input_path, output_path, refs_txt=None):
+def convert_standard_to_online(input_path, output_path, refs_txt=None):
+    """
+    Convert a Standard NHSJS .docx (superscript numbered citations) to the
+    Online format (((full citation)) blocks).
+
+    Args:
+        input_path:  path to the Standard .docx
+        output_path: where to write the converted Online .docx
+        refs_txt:    optional path to a plain-text references file. When
+                     provided, references are loaded from that file instead
+                     of from a "References" section inside the docx.
+
+    Raises:
+        Whatever python-docx raises if input_path is missing or malformed.
+    """
     print(f"\n📄  Loading: {input_path}")
     doc = Document(input_path)
 
@@ -248,11 +279,22 @@ def convert(input_path, output_path, refs_txt=None):
     print(f"💾  Saved: {output_path}\n")
 
 
-if __name__ == '__main__':
+# Backwards-compatible alias. Older code (streamlit_app.py, external CLI
+# callers, any imports that landed before the v1 rename) continues to work.
+convert = convert_standard_to_online
+
+
+def _cli():
+    """argparse entry point used by both `python -m nhsjs_standard_to_online`
+    and the `nhsjs-standard-to-online` console script."""
     parser = argparse.ArgumentParser(description="Convert NHSJS citations to Online format.")
     parser.add_argument("input",  help="Input .docx file")
     parser.add_argument("output", help="Output .docx file")
     parser.add_argument("--refs", metavar="FILE.txt",
                         help="Optional plain-text file containing numbered references")
     args = parser.parse_args()
-    convert(args.input, args.output, refs_txt=args.refs)
+    convert_standard_to_online(args.input, args.output, refs_txt=args.refs)
+
+
+if __name__ == '__main__':
+    _cli()

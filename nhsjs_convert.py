@@ -5,8 +5,21 @@ nhsjs_convert.py  v4
 Convert a LaTeX manuscript (single .tex file, folder, or .zip) to an
 NHSJS online-publication Word (.docx) file.
 
-Usage
------
+Public API
+----------
+    convert_latex_to_online(input_path, output_path, project_root=None) -> None
+        One-call entry point. Handles .tex / .zip / project-folder input,
+        parses bibliography (numbered, key-based, and external .bib),
+        embeds figures, resolves cross-references, and writes the final
+        .docx. If project_root is omitted it is derived from input_path.
+
+Everything else exposed at module level (load_project, parse_bibliography,
+protect_math, get_body, parse_body, build_label_map, write_docx, ...) is
+considered semi-public for the Streamlit app's existing per-step
+orchestration, but new code should call convert_latex_to_online instead.
+
+Usage (CLI)
+-----------
     python nhsjs_convert.py input.tex [output.docx]
     python nhsjs_convert.py input.zip [output.docx]
     python nhsjs_convert.py project_folder/ [output.docx]
@@ -124,15 +137,12 @@ def parse_bibliography(tex: str, project_root: "Path | None" = None) -> tuple:
     key_bib = {}
 
     # --- A: enumerate-based numbered references (NHSJS style) ----------------
+    # Only match enumerates that are explicitly inside a \section{References}
+    # to avoid accidentally grabbing body content lists as references.
     enum_m = re.search(
         r'\\section\*?\{References?\}.*?\\begin\{enumerate\}(.*?)\\end\{enumerate\}',
         tex, re.DOTALL | re.IGNORECASE
     )
-    if not enum_m:
-        enum_m = re.search(
-            r'\\begin\{enumerate\}(.*?)\\end\{enumerate\}(?!.*\\begin\{enumerate\})',
-            tex, re.DOTALL
-        )
 
     if enum_m:
         raw_enum = enum_m.group(1)
@@ -607,6 +617,10 @@ def get_body(tex: str) -> str:
         r'\\section\*?\{References?\}.*?\\begin\{enumerate\}.*?\\end\{enumerate\}',
         '', body, flags=re.DOTALL | re.IGNORECASE
     )
+    # Remove \bibliographystyle{...} and \bibliography{...} so they don't
+    # leak through as plain text in the output.
+    body = re.sub(r'\\bibliographystyle\{[^}]*\}', '', body)
+    body = re.sub(r'\\bibliography\{[^}]*\}', '', body)
     return body
 
 
@@ -704,7 +718,9 @@ def parse_body(body: str) -> list:
     for m in re.finditer(r'\\begin\{enumerate\}(.*?)\\end\{enumerate\}',
                          body, re.DOTALL):
         items = _split_items(m.group(1))
-        events.append((m.start(), m.end(), ListBlock(items, ordered=True)))
+        # Render as unordered (bullet) list to avoid Word's continuous
+        # numbering across separate enumerate blocks.
+        events.append((m.start(), m.end(), ListBlock(items, ordered=False)))
 
     events.sort(key=lambda x: x[0])
     events = _remove_overlaps(events)
@@ -1457,8 +1473,50 @@ def write_docx(blocks: list, num_bib: dict, key_bib: dict,
                 para = doc.add_paragraph(style=list_style)
                 _add_runs_to_para(para, runs)
 
+    # --- References section at the end of the document ---
+    _write_references_section(doc, num_bib, key_bib)
+
     doc.save(output_path)
     print(f'\nSaved: {output_path}')
+
+
+def _write_references_section(doc, num_bib: dict, key_bib: dict):
+    """
+    Append a numbered References section at the end of the document.
+    Numbered refs (from \section{References}\begin{enumerate}) come first
+    in numeric order, then key-based refs (from \begin{thebibliography}
+    or .bib files) in insertion order. Duplicates are skipped.
+    """
+    all_refs = []
+    seen = set()
+
+    if num_bib:
+        for idx in sorted(num_bib.keys()):
+            ref = num_bib[idx]
+            if ref not in seen:
+                all_refs.append(ref)
+                seen.add(ref)
+    if key_bib:
+        for citation in key_bib.values():
+            if citation not in seen:
+                all_refs.append(citation)
+                seen.add(citation)
+
+    if not all_refs:
+        return
+
+    doc.add_heading('References', level=1)
+    for i, citation in enumerate(all_refs, 1):
+        para = doc.add_paragraph()
+        # Number prefix
+        num_run = para.add_run(f'[{i}] ')
+        num_run.bold = True
+        num_run.font.name = 'Times New Roman'
+        num_run.font.size = Pt(12)
+        # Citation text
+        cit_run = para.add_run(citation)
+        cit_run.font.name = 'Times New Roman'
+        cit_run.font.size = Pt(12)
 
 
 def _add_figure_placeholder(doc, filename: str, number: int = 0):
@@ -1475,8 +1533,43 @@ def _add_figure_placeholder(doc, filename: str, number: int = 0):
 
 
 # ============================================================================
-# 9.  MAIN
+# 9.  PUBLIC API + MAIN
 # ============================================================================
+
+def convert_latex_to_online(input_path, output_path, project_root=None):
+    """
+    Convert a LaTeX manuscript to NHSJS online-publication Word format.
+
+    Args:
+        input_path:   path to a .tex file, an Overleaf .zip, or a project
+                      folder containing a main .tex file.
+        output_path:  where to write the resulting .docx.
+        project_root: optional override for the project root directory.
+                      When None (default), the root is derived from
+                      input_path — the parent of the .tex file, the
+                      extracted zip directory, or the folder itself.
+                      Pass an explicit Path if your figures live in a
+                      different directory from your tex source.
+
+    Returns:
+        None. Output is written to output_path.
+
+    Raises:
+        FileNotFoundError if input_path can't be located.
+    """
+    tex_source, derived_root = load_project(str(input_path))
+    root = Path(project_root) if project_root is not None else derived_root
+
+    num_bib, key_bib = parse_bibliography(tex_source, root)
+    if not num_bib and not key_bib:
+        print('  WARNING: No references found.', file=sys.stderr)
+
+    tex_protected = protect_math(tex_source)
+    body = get_body(tex_protected)
+    blocks = parse_body(body)
+    label_map = build_label_map(blocks)
+    write_docx(blocks, num_bib, key_bib, label_map, root, str(output_path))
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -1496,34 +1589,7 @@ def main():
                else Path(out_stem + '_nhsjs_online.docx')
 
     print(f'Loading project from: {in_path}')
-    tex, project_root = load_project(str(in_path))
-    print(f'  Project root: {project_root}')
-
-    # 1. Parse bibliography BEFORE math protection
-    num_bib, key_bib = parse_bibliography(tex, project_root)
-    print(f'  Numbered refs: {len(num_bib)},  Key-based refs: {len(key_bib)}')
-    if not num_bib and not key_bib:
-        print('  WARNING: No references found.', file=sys.stderr)
-
-    # 2. Protect math
-    tex = protect_math(tex)
-
-    # 3. Extract body
-    body = get_body(tex)
-
-    # 4. Parse blocks
-    blocks = parse_body(body)
-    counts = {}
-    for b in blocks:
-        k = type(b).__name__
-        counts[k] = counts.get(k, 0) + 1
-    print(f'  Blocks: {counts}')
-
-    # 5. Build label map (assigns figure/table numbers, resolves cross-refs)
-    label_map = build_label_map(blocks)
-
-    # 6. Write docx
-    write_docx(blocks, num_bib, key_bib, label_map, project_root, str(out_path))
+    convert_latex_to_online(in_path, out_path)
 
 
 if __name__ == '__main__':
