@@ -24,3 +24,20 @@ env/
 
 # Smoke test scratch
 tests/_out/
+
+# Added by publish script
+credentials*.json
+client_secret*.json
+service_account*.json
+token.json
+token*.json
+*.key
+*.pem
+.env
+.env.*
+*.log
+*.cache
+*.sqlite
+*.db
+outputs/
+data/
