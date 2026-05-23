@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nhsjs-tools"
-version = "1.0.0"
+version = "2.0.0"
 description = "Conversion + revision tooling for NHSJS (National High School Journal of Science) manuscripts."
 readme = "README.md"
 requires-python = ">=3.10"
