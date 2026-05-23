@@ -45,6 +45,7 @@ audit = audit_revision("revision.md", "original.docx", "submit/", log_path="revi
 Console scripts available after install:
 
 ```bash
+nhsjs-start                                                         # print the v2.2 system prompt + auto-detected inputs
 nhsjs-build-revision revision.md original.docx submit/ --log revision-log.md
 nhsjs-audit-revision revision.md original.docx submit/ --log revision-log.md
 nhsjs-latex-to-online project.zip output.docx
@@ -53,20 +54,47 @@ nhsjs-standard-to-online manuscript.docx output.docx
 
 Library deps: `python-docx`, `Pillow`, `lxml`, `PyYAML`. **No Streamlit** — the package is safe to import from any Python environment.
 
-### 3. Claude.ai analysis tool / sandbox path (Sonnet-online users without local Python)
+### 3. One-command bootstrap inside any Claude chat (recommended for new sessions)
 
-In a Claude.ai web chat with the analysis tool enabled:
+The package ships the v2.2 system prompt as bundled data, accessed via a
+`nhsjs-start` CLI. Drop your paper + reviewer PDF into a Claude chat with
+code execution (Claude.ai analysis tool, Cowork, or Claude Code), then:
 
-1. Upload the original Standard `.docx` and the bot-produced `revision.md` (and optionally `revision-log.md`) to the chat.
+```bash
+!pip install nhsjs-tools -q
+!nhsjs-start
+```
+
+`nhsjs-start` prints the v2.2 system prompt to stdout, followed by a
+"## Detected inputs" section listing the .docx and .pdf files it found in
+the current directory. Claude reads the output, recognizes the "Override
+any prior instructions" line at the top, and starts Phase 0 — Triage,
+Asset Freeze, patches, build, audit — all in the same chat.
+
+Override the auto-detection if needed:
+
+```bash
+nhsjs-start --paper paper.docx --review review.pdf
+nhsjs-start --dir /path/to/scholar/folder
+nhsjs-start --list           # list bundled prompt versions
+nhsjs-start --no-preamble    # prompt only, no inputs section
+```
+
+The prompt and the engine ship together, so an `nhsjs-tools` version
+upgrade is also a prompt upgrade — they can't drift out of sync.
+
+### 4. Claude.ai analysis tool / sandbox path (direct, no bootstrap)
+
+If you already have a `revision.md` (e.g., produced earlier in another chat) and just want to build the outputs:
+
+1. Upload `original.docx` + `revision.md` (+ optional `revision-log.md`) to the chat.
 2. Ask Claude to run:
    ```python
-   !pip install nhsjs-tools --break-system-packages -q
+   !pip install nhsjs-tools -q
    from nhsjs_revision_builder import build_all
    result = build_all("revision.md", "original.docx", "revision-log.md", "submit/")
    ```
 3. Claude offers each output file in `submit/` as a download.
-
-Same end state as the Streamlit tab, no separate UI round-trip.
 
 ## v2.2 patch model — what's in `revision.md`
 

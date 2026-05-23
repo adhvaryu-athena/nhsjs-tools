@@ -44,12 +44,21 @@ nhsjs-latex-to-online = "nhsjs_convert:main"
 nhsjs-standard-to-online = "nhsjs_standard_to_online:_cli"
 nhsjs-build-revision = "nhsjs_revision_builder:_cli"
 nhsjs-audit-revision = "nhsjs_audit:_cli"
+nhsjs-start = "nhsjs_prompts:_cli"
 
-# Flat-layout: ship each top-level .py as its own module.
+# Mixed layout: flat .py modules at the top level + a thin
+# nhsjs_tools_assets package that ships bundled data (the RaR system
+# prompt). importlib.resources reads the prompt from the assets package
+# at runtime.
 [tool.setuptools]
 py-modules = [
     "nhsjs_convert",
     "nhsjs_standard_to_online",
     "nhsjs_revision_builder",
     "nhsjs_audit",
+    "nhsjs_prompts",
 ]
+packages = ["nhsjs_tools_assets"]
+
+[tool.setuptools.package-data]
+nhsjs_tools_assets = ["prompts/*.md"]
