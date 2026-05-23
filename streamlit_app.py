@@ -123,26 +123,29 @@ with tab2:
 
 # ── Tab 3: Revision → All Outputs ─────────────────────────────────────────
 #
-# Consumes a `revision.md` (the source-of-truth artefact emitted by the
-# Revise-After-Review v2 agent) and produces all 5 NHSJS submission
+# Consumes a v2.2 `revision.md` (sequence of anchored patches) + the
+# original Standard manuscript .docx, produces all 5 NHSJS submission
 # files in a single downloadable zip.
 #
-# This is the bridge that makes Sonnet-online mode work for users without
-# file tools: paste the bot's emitted revision.md block, optionally paste
-# the matching revision-log.md, click Build All, download the zip.
+# The patch model is the v2.0.0 anti-hallucination move: the bot never
+# re-emits unchanged text, the build applies patches against the original
+# docx with FIND-must-match-verbatim verification, fails loudly on
+# anchor misses.
 
 with tab3:
     st.markdown(
-        "Paste the `revision.md` produced by the **Revise-After-Review v2** "
-        "agent. The builder produces all 5 submission files — "
+        "Apply a v2.2 `revision.md` (anchored patches) to the original "
+        "Standard manuscript. Outputs all 5 NHSJS submission files — "
         "Standard-Tracked, Standard-Clean, Online, Response-Letter, "
-        "Student-Handoff — plus a `FILES.md` manifest, packaged as a zip."
+        "Student-Handoff — plus `FILES.md` and a `Self-Audit` report, "
+        "packaged as a zip."
     )
-    st.markdown(
-        "The `revision-log.md` is optional. When provided it drives the "
-        "point-by-point reviewer response letter and the student handoff "
-        "themes; when omitted, both files emit placeholder shells you can "
-        "fill in by hand."
+
+    st.subheader("Original Standard manuscript (required)")
+    original_docx_file = st.file_uploader(
+        "Upload the original .docx (the file the patches anchor against)",
+        type=["docx"],
+        key="rev_original_upload",
     )
 
     col1, col2 = st.columns(2)
@@ -153,7 +156,6 @@ with tab3:
             "Upload revision.md",
             type=["md", "txt"],
             key="rev_upload",
-            label_visibility="visible",
         )
         rev_paste = st.text_area(
             "…or paste the contents below",
@@ -166,9 +168,10 @@ with tab3:
                 "reviewer_decision_date: \"2026-04-15\"\n"
                 "target_submit_date: \"2026-04-22\"\n"
                 "---\n\n"
-                "# Title\n\n"
-                "## Abstract\n\n"
-                "Your abstract with {{+inserted+}} text and [[CITE:1]] citations.\n"
+                "## P1\n"
+                "OP: FIND_REPLACE\n"
+                "FIND: \"original sentence verbatim from the docx\"\n"
+                "REPLACE: \"revised sentence with [[CITE:23]] citation marker\"\n"
             ),
         )
 
@@ -200,6 +203,10 @@ with tab3:
 
     st.divider()
     if st.button("Build All", key="rev_btn", type="primary"):
+        if not original_docx_file:
+            st.error("Original .docx is required — upload above.")
+            st.stop()
+
         rev_md = (
             rev_file.getvalue().decode("utf-8")
             if rev_file else rev_paste
@@ -223,16 +230,22 @@ with tab3:
                     log_path = work / "revision-log.md"
                     log_path.write_text(log_md, encoding="utf-8")
 
+                orig_path = work / "original.docx"
+                orig_path.write_bytes(original_docx_file.getvalue())
+
                 out_dir = work / "submit"
                 result = build_all(
                     str(rev_path),
+                    str(orig_path),
                     str(log_path) if log_path else None,
                     str(out_dir),
                 )
 
                 # Audit
                 audit_results = audit_revision(
-                    str(rev_path), str(out_dir),
+                    str(rev_path),
+                    str(orig_path),
+                    str(out_dir),
                     log_path=str(log_path) if log_path else None,
                 )
                 counts = summary_counts(audit_results)
