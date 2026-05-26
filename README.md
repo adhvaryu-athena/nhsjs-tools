@@ -2,6 +2,12 @@
 
 Library + Streamlit web app for converting and revising NHSJS manuscripts. v2.0.0 adds a v2.2 patch-application engine that's the build half of the **Revise-After-Review v2.2** workflow.
 
+## Why this exists
+
+NHSJS (National High School Journal of Science) accepts manuscripts in two distinct formats — a "Standard" Word format with real OOXML superscript citations and a References section, and an "Online" Word format with `((full citation))` brackets inline — and requires a specific set of submission files for every revision round (tracked-changes manuscript, clean manuscript, online version, point-by-point response letter). Hand-formatting a paper end-to-end across these formats and revision rounds used to take 2–3 hours per submission, with formatting failures (orphan references, citation-numbering drift, mis-numbered figures, anonymity leaks, vanishing content under Accept-All) surfacing only when the editor flagged them.
+
+This package compresses that into ~30 minutes of patch authoring + a tool run, and a 13-check self-audit catches the formatting failures before submission rather than after. It is built around an anti-hallucination patch model — `revision.md` is a sequence of anchored patches against the original docx, not a re-emission of the manuscript — so the bot authoring the revision never silently rewrites untouched text. The Aaryamann regression gate (a real mangroves paper, 73 patches, 21,000 characters revised) reconciles at 1.000 ratio against the human-produced final tracked docx.
+
 ## What's in the box
 
 **LaTeX → Online Format.** Overleaf `.zip` or `.tex` → NHSJS Online `.docx` with `((full citation))` brackets, embedded figures, auto-numbered captions, resolved cross-references.
@@ -232,6 +238,14 @@ v2.0.0 switched to a patch model: `revision.md` is a sequence of anchored patch 
 The Aaryamann reconstruction test (real mangroves paper, 73 patches, 21k chars revised) reconciles at 1.000 ratio against the human-produced final tracked docx. That's the regression gate for any future v2.x release.
 
 v1.0.0 is yanked from PyPI as of v2.0.0 publish. Existing installs continue to work but new `pip install nhsjs-tools` resolves to v2.0.0.
+
+## Part of the Pangea Toolkit
+
+`nhsjs-tools` is the submission-formatter component of the **Pangea Toolkit** — a corpus-grounded research-ideation system used at Athena Education to guide Indian high-school students from a vague research interest to a published NHSJS / JHSS paper. The toolkit's upstream layers (the IdeationBOT v6 system prompt, per-venue writing scaffolds, the NHSJS reviewer-pattern intelligence layer) live in prompts; this package is the only piece with actual Python in it.
+
+Where it sits in the workflow: after ideation produces the PRD, after the writing-prompt scaffolds produce a draft, after NHSJS returns reviewer comments and the **Revise-After-Review v2.2** prompt produces the patched `revision.md` — `nhsjs-tools` turns that markdown into the actual files NHSJS requires.
+
+Full toolkit: [adhvaryu-athena/pangea-toolkit](https://github.com/adhvaryu-athena/pangea-toolkit).
 
 ## Future work
 
